@@ -4,10 +4,13 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.net.SocketAddress;
 import java.net.URI;
+import java.security.PrivilegedActionException;
+import java.security.PrivilegedExceptionAction;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicInteger;
+
 import javax.net.ssl.SSLContext;
 import javax.security.auth.callback.CallbackHandler;
 
@@ -32,6 +35,8 @@ import org.xnio.Xnio;
 import org.xnio.XnioWorker;
 import org.xnio.ssl.XnioSsl;
 
+import static java.security.AccessController.doPrivileged;
+
 /**
  * @author John Bailey
  */
@@ -44,11 +49,20 @@ public class EndpointCache {
         final CacheKey endpointHash = new CacheKey(remoteConnectionProviderOptions, endPointCreationOptions, endpointName);
         CacheEntry cacheEntry = cache.get(endpointHash);
         if (cacheEntry == null) {
-            final Endpoint endpoint = Remoting.createEndpoint(endpointName, Xnio.getInstance(), endPointCreationOptions);
-            endpoint.addConnectionProvider("remote", new RemoteConnectionProviderFactory(), remoteConnectionProviderOptions);
-            endpoint.addConnectionProvider("http-remoting", new HttpUpgradeConnectionProviderFactory(), OptionMap.builder().addAll(remoteConnectionProviderOptions).set(Options.SSL_ENABLED, Boolean.FALSE).getMap());
-            endpoint.addConnectionProvider("https-remoting", new HttpUpgradeConnectionProviderFactory(), OptionMap.builder().addAll(remoteConnectionProviderOptions).set(Options.SSL_ENABLED, Boolean.TRUE).getMap());
-
+            final Endpoint endpoint;
+            try {
+                endpoint = doPrivileged(new PrivilegedExceptionAction<Endpoint>() {
+                    public Endpoint run() throws Exception {
+                        final Endpoint endpoingInner = Remoting.createEndpoint(endpointName, Xnio.getInstance(), endPointCreationOptions);
+                        endpoingInner.addConnectionProvider("remote", new RemoteConnectionProviderFactory(), remoteConnectionProviderOptions);
+                        endpoingInner.addConnectionProvider("http-remoting", new HttpUpgradeConnectionProviderFactory(), OptionMap.builder().addAll(remoteConnectionProviderOptions).set(Options.SSL_ENABLED, Boolean.FALSE).getMap());
+                        endpoingInner.addConnectionProvider("https-remoting", new HttpUpgradeConnectionProviderFactory(), OptionMap.builder().addAll(remoteConnectionProviderOptions).set(Options.SSL_ENABLED, Boolean.TRUE).getMap());
+                        return endpoingInner;
+                    }
+                });
+            } catch (PrivilegedActionException e) {
+                throw new IOException(e);
+            }
             cacheEntry = new CacheEntry(endpoint, new EndpointWrapper(endpointHash, endpoint));
             cache.putIfAbsent(endpointHash, cacheEntry);
         }
